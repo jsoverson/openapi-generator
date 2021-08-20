@@ -2,25 +2,41 @@
 
 #![allow(unused_imports)]
 
-use async_trait::async_trait;
-use futures::{future, Stream, StreamExt, TryFutureExt, TryStreamExt};
-use hyper::server::conn::Http;
-use hyper::service::Service;
-use log::info;
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "ios")))]
-use openssl::ssl::SslAcceptorBuilder;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
-use swagger::{Has, XSpanIdString};
+use std::pin::Pin;
+use std::sync::{
+  Arc,
+  Mutex,
+};
+use std::task::{
+  Context,
+  Poll,
+};
+
+use async_trait::async_trait;
+use futures::{
+  future,
+  Stream,
+  StreamExt,
+  TryFutureExt,
+  TryStreamExt,
+};
+use hyper::server::conn::Http;
+use hyper::service::Service;
+use log::info;
+use openssl::ssl::Ssl;
 use swagger::auth::MakeAllowAllAuthenticator;
-use swagger::EmptyContext;
+use swagger::{
+  EmptyContext,
+  Has,
+  XSpanIdString,
+};
 use tokio::net::TcpListener;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "ios")))]
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::ssl::{SslAcceptorBuilder, SslAcceptor, SslFiletype, SslMethod};
 
 use {{{externCrateName}}}::models;
 
@@ -55,25 +71,27 @@ pub async fn create(addr: &str, https: bool) {
             ssl.check_private_key().expect("Failed to check private key");
 
             let tls_acceptor = Arc::new(ssl.build());
-            let mut tcp_listener = TcpListener::bind(&addr).await.unwrap();
-            let mut incoming = tcp_listener.incoming();
+            let tcp_listener = TcpListener::bind(&addr).await.unwrap();
 
-            while let (Some(tcp), rest) = incoming.into_future().await {
-                if let Ok(tcp) = tcp {
-                    let addr = tcp.peer_addr().expect("Unable to get remote address");
-                    let service = service.call(addr);
-                    let tls_acceptor = Arc::clone(&tls_acceptor);
+            while let Ok((tcp, _)) = tcp_listener.accept().await {
+              let addr = tcp.peer_addr().expect("Unable to get remote address");
+              let service = service.call(addr);
+              let tls_acceptor = Arc::clone(&tls_acceptor);
 
-                    tokio::spawn(async move {
-                        let tls = tokio_openssl::accept(&*tls_acceptor, tcp).await.map_err(|_| ())?;
+              tokio::spawn(async move {
+                let ssl = Ssl::new(tls_acceptor.context()).expect("Failed to create async Ssl instance");
+                let mut stream =
+                  tokio_openssl::SslStream::new(ssl, tcp).expect("Failed to create async SslStream");
 
-                        let service = service.await.map_err(|_| ())?;
+                Pin::new(&mut stream).accept().await.map_err(|_| ())?;
 
-                        Http::new().serve_connection(tls, service).await.map_err(|_| ())
-                    });
-                }
+                let service = service.await.map_err(|_| ())?;
 
-                incoming = rest;
+                Http::new()
+                  .serve_connection(stream, service)
+                  .await
+                  .map_err(|_| ())
+              });
             }
         }
     } else {
