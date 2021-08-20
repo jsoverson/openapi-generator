@@ -1,5 +1,5 @@
             // {{{operationId}}} - {{{httpMethod}}} {{{path}}}
-            &hyper::Method::{{vendorExtensions.x-http-method}} if path.matched(paths::ID_{{vendorExtensions.x-path-id}}) => {
+            hyper::Method::{{vendorExtensions.x-http-method}} if path.matched(paths::ID_{{vendorExtensions.x-path-id}}) => {
 {{#hasAuthMethods}}
                 {
                     let authorization = match (&context as &dyn Has<Option<Authorization>>).get() {
